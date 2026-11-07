@@ -11,7 +11,9 @@ param(
     [string]$OutputDir,
     [string]$Candidate,
     [switch]$SkipChineseControl,
-    [string]$Python = 'python'
+    [string]$Python = 'python',
+    # Only read: the WebView2 SDK binaries are copied out for the prose E2E step.
+    [string]$GameDir = 'C:\Program Files (x86)\Steam\steamapps\common\Command - Modern Operations'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,6 +98,10 @@ if ((Test-Path -LiteralPath $fixture) -and (Test-Path -LiteralPath $dll)) {
     $isolationArgs = @('isolation', $dll)
     if ($zhDll) { $isolationArgs += $zhDll }
     [void](Invoke-Step 'isolation' $fixture $isolationArgs)
+    # Two separate processes over one directory = two game sessions.
+    $sessionDir = Join-Path $OutputDir 'session-scratch'
+    [void](Invoke-Step 'session-1' $fixture @('session', $dll, $json, $sessionDir))
+    [void](Invoke-Step 'session-2' $fixture @('session', $dll, $json, $sessionDir))
 
     # 5. End to end: patch a synthetic game directory, start its Command.exe, restore.
     $game = Join-Path $OutputDir 'host-game'
@@ -123,6 +129,32 @@ if ((Test-Path -LiteralPath $fixture) -and (Test-Path -LiteralPath $dll)) {
             pass = [int]$restored + [int]$removed; fail = 2 - [int]$restored - [int]$removed; log = '' })
         Write-Output ("{0} {1,-22} config byte-identical={2} payload removed={3}" -f $mark, 'host-restore-bytes', $restored, $removed)
     }
+}
+
+# 5b. Prose in a real WebView2 (Edge runtime + SDK binaries from the game; skipped when absent).
+$sdk = @('Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll')
+$haveSdk = $GameDir -and (Test-Path -LiteralPath $dll)
+foreach ($name in $sdk) { if ($haveSdk -and -not (Test-Path -LiteralPath (Join-Path $GameDir $name) -PathType Leaf)) { $haveSdk = $false } }
+if ($haveSdk) {
+    $webDir = Join-Path $OutputDir 'webview'
+    New-Item -ItemType Directory -Path $webDir | Out-Null
+    foreach ($name in $sdk) { Copy-Item -LiteralPath (Join-Path $GameDir $name) -Destination (Join-Path $webDir $name) }
+    $webExe = Join-Path $webDir 'JapaneseWebViewTests.exe'
+    $webBuilt = Invoke-Step 'compile-webview' $compiler @('-nologo', '-utf8output', '-codepage:65001', '-target:exe',
+        '-platform:x64', "-out:$webExe", '-reference:System.dll', '-reference:System.Core.dll',
+        '-reference:System.Drawing.dll', '-reference:System.Windows.Forms.dll',
+        ('-reference:' + (Join-Path $webDir 'Microsoft.Web.WebView2.Core.dll')),
+        ('-reference:' + (Join-Path $webDir 'Microsoft.Web.WebView2.WinForms.dll')),
+        (Join-Path $repo 'src\tests\JapaneseWebViewTests.cs'))
+    $webArgs = @($dll, $json, (Join-Path $webDir 'work'))
+    # Real tutorial pages (read-only) prove the in-page paragraph split matches the extractor.
+    $pages = Join-Path $GameDir 'Scenarios\Tutorials\Air Warfare Tutorials\Flight Tutorial'
+    if (Test-Path -LiteralPath $pages -PathType Container) { $webArgs += $pages }
+    if ($webBuilt) { [void](Invoke-Step 'webview-prose' $webExe $webArgs $webDir) }
+}
+else {
+    [void]$steps.Add([ordered]@{ step = 'webview-prose'; ok = $true; skipped = $true; exit = 0; pass = 0; fail = 0; log = '' })
+    Write-Host "skip webview-prose          WebView2 SDK binaries not found under -GameDir"
 }
 
 # 6. Python suites

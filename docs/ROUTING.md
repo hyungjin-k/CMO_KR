@@ -60,8 +60,8 @@
 |---|---|---|
 | `scripts/build.sh` | 编译引擎 DLL、更新器、共享测试、安装器；顺带跑 `build_dict.py` | 增删编译目标、改编译参数 |
 | `scripts/build.ps1` | **仅引擎构建**（不碰游戏、不写安装包）：自动收集 `src/engine/*.cs` + `src/shared/MapLabelRenderer.cs`，并把 `WebViewTranslation.js` 作为嵌入资源编进 DLL。新增引擎源文件无需改脚本 |
-| `scripts/build_ja.ps1` | Japanese minimal UI candidate build: compiles ONLY `src/ja/JapaneseUiLocalization.cs` into `CMOLocalizerJa.dll` (no Chinese engine code), runs `japanese_dict.py`, writes `ja-candidate.manifest.json` with SHA256. Never deploys, never writes `dict/`; `-Replace` only removes a previous candidate | Japanese engine sources or assembly identity change |
-| `scripts/test_ja.ps1` | Japanese test run: candidate + Chinese control DLL build, `JapaneseLocalizationTests.cs` unit/isolation, end-to-end CLR load in a synthetic game directory (apply -> run fixture as `Command.exe` -> byte-exact restore), both Python suites; `test-report.json` with hashes under `build/ja-tests/`. Never operates CMO | Japanese test steps change |
+| `scripts/build_ja.ps1` | Japanese minimal UI candidate build: compiles ONLY `src/ja/*.cs` into `CMOLocalizerJa.dll` (no Chinese engine code), runs `japanese_dict.py`, writes `ja-candidate.manifest.json` with SHA256. Never deploys, never writes `dict/`; `-Replace` only removes a previous candidate | Japanese engine sources or assembly identity change |
+| `scripts/test_ja.ps1` | Japanese test run: candidate + Chinese control DLL build, `JapaneseLocalizationTests.cs` unit/isolation, end-to-end CLR load in a synthetic game directory (apply -> run fixture as `Command.exe` -> byte-exact restore), real WebView2 prose E2E incl. the game's Flight Tutorial pages (read-only; skipped without `-GameDir` SDK binaries), both Python suites; `test-report.json` with hashes under `build/ja-tests/`. Never operates CMO | Japanese test steps change |
 | `scripts/manage_ja_patch.py` | Apply/restore the Japanese candidate in a game directory: only `CMOLocalizerJa.dll/json` + two loader lines in `Command.exe.config`. Dry-run unless `--yes`; refuses while that `Command.exe` runs or another appDomainManager (e.g. the Chinese patch) is configured; hash-checked backup, rollback on failure, drift-aware restore | Japanese deployment contract changes |
 | `scripts/deploy.sh` | 把 `build/` 产物装进游戏目录 + 写 `Command.exe.config` | 部署清单变了 |
 | `scripts/package.sh` | 打绿色包 zip（含 `--no-report` 防覆盖 live 报告） | 包内文件清单变了 |
@@ -80,7 +80,8 @@
 |---|---|
 | `src/engine/CMOLocalizer.cs` | **整个汉化引擎**（约 7600 行，C# 5）。一轮改动的主战场，见下方内部地图 |
 | `src/engine/Reflect.cs` | 反射辅助（私有字段/方法访问），引擎的地基 |
-| `src/ja/JapaneseUiLocalization.cs` | **Japanese engine, separate DLL `CMOLocalizerJa.dll` (not compiled by `build.ps1`)**: `JapaneseDomainManager` entry point + scoped exact display translation (menu scope: menus/context menus of any window; options scope: Game Options window only; inputs/combos never written). Shares nothing with the Chinese engine: no pool injection, tile server, culture/font patching, dialog dismissal, WPF/WebView/DB. Re-apply is decided by "is a source key", not `ContainsChinese` (kana-safe). Logs `CMOLocalizerJa.log`, collects misses in `CMOLocalizerJa_untranslated.tsv` |
+| `src/ja/JapaneseUiLocalization.cs` | **Japanese engine, separate DLL `CMOLocalizerJa.dll` (not compiled by `build.ps1`)**: `JapaneseDomainManager` entry point + scoped exact display translation (menu scope: menus/context menus of any window; options scope: Game Options window only; prose scope: see `JapaneseProseTranslation.cs`; inputs/combos never written). Shares nothing with the Chinese engine: no pool injection, tile server, culture/font patching, dialog dismissal, WPF/WebView/DB. Re-apply is decided by "is a source key", not `ContainsChinese` (kana-safe). Logs `CMOLocalizerJa.log`, collects misses in `CMOLocalizerJa_untranslated.tsv` |
+| `src/ja/JapaneseProseTranslation.cs` | Japanese engine, prose scope: WebView2 in `LoadScenario`/`ChooseSide`/`NewMessageForm` (reflection only). In-page script splits paragraphs like `extract_ja_prose.py`, host looks them up, page replaces only text/formatting runs (never links, inputs, editable regions); other WebView2 hosts are only logged |
 | `src/engine/WeaponsTextTranslation.cs` | 武器行绑定投影用的 `IMultiValueConverter`/`IValueConverter`：在绑定求值链上产出中文，`ConvertBack` 明确拒绝（只做显示投影） |
 | `src/engine/ComboBoxTranslation.cs` | 下拉项增量翻译：动态回填排队，保留业务键/选中值/原生类型 token |
 | `src/engine/DarkTreeTranslation.cs` | 深色树分片遍历：核对实时集合归属，分片避免长阻塞 |
@@ -147,6 +148,7 @@
 | `dict/src/menu_terms.json` | 菜单术语 |
 | `dict/src/ja_menu.json` | English-to-Japanese menu labels incl. shortcut display strings, ordered as `docs/menu_strings_dump.txt`; built only by `scripts/japanese_dict.py` (`build_dict.py` skips `ja_*.json`, R80) |
 | `dict/src/ja_options.json` | English-to-Japanese Game Options labels, tabs, tooltips and grid headers (display only, never pool-injected); `Every N seconds` / `Vertical scaling: xN` variants are engine rules |
+| `dict/src/ja_prose.json` | English paragraph -> Japanese for scenario descriptions, briefings and special messages (keys whitespace-normalized, from `extract_ja_prose.py`); built only by `japanese_dict.py`; round 1 = Flight Tutorial 1-8 |
 | `dict/src/campaign_ui.json` | 战役界面串 |
 | `dict/src/scenario_titles.json` | 想定标题 |
 | `dict/src/scenario_settings.json` | 想定设置项 |
@@ -279,7 +281,8 @@
 | 路径 | 职责 |
 |---|---|
 | `scripts/build_dict.py` | **核心构建**：`dict/src/*.json` → `dict/CMOLocalizer.json`（确定性、字节可复现） |
-| `scripts/japanese_dict.py` | Japanese dictionary builder: reads only `ja_menu.json`/`ja_options.json`; rejects untranslated, placeholder/shortcut/mnemonic/padding changes, code, conflicts and non-idempotent values; writes `CMOLocalizerJa.json` (empty offsets/words/partial/comments). `--check`, `--out` (refuses `dict/`) |
+| `scripts/japanese_dict.py` | Japanese dictionary builder: reads only `ja_menu.json`/`ja_options.json`; rejects untranslated, placeholder/shortcut/mnemonic/padding changes, code, conflicts and non-idempotent values; writes `CMOLocalizerJa.json` (empty offsets/words/partial/comments). Prose pairs also keep numbers, key names, quoted UI labels and paths. `--check`, `--out` (refuses `dict/`), `--check-prose FILE` for translator batches |
+| `scripts/extract_ja_prose.py` | Reads scenario HTML (read-only) and splits it into the engine's paragraph units: `worklist` (untranslated paragraphs with source files, for translators) and `coverage` (exit 3 while any paragraph is missing); never writes into the game or `dict/` |
 | `scripts/build_db_enums.py` | 生成 `db_enums.json`（扫所有 `Enum*` 表） |
 | `scripts/build_db_enums_complete.py` | 国家/阵营官方规范译名对照 |
 | `scripts/generate_db_platforms_facilities.py` | 生成四类平台/设施名 |
@@ -387,6 +390,7 @@
 | `docs/ROUTING.md` | **本文件**。新增文件必须登记 |
 | `docs/JAPANESE_LOCALIZATION_FEASIBILITY.md` | Japanese patch feasibility audit in Korean: code evidence, locale risks, minimal UI plan and validation limits; update when the Japanese localization scope or baseline changes. |
 | `docs/JAPANESE_MINIMAL_UI.md` | Korean guide for the Japanese minimal UI candidate: build, test, apply/restore, scope, measured results, limitations and next steps; update with every Japanese scope change |
+| `docs/JAPANESE_GLOSSARY.md` | Japanese translation rules and terminology (format rules enforced by `japanese_dict.py --check-prose`); extend when a translation round settles new terms |
 | `docs/BUG_REGISTRY.md` | 缺陷台账 R1–R50，**只增不改**。修 bug 必须登记 |
 | `docs/CHANGELOG.md` | 发布说明；`publish_release.py` 取顶部段落作为 Release 正文 |
 | `docs/RELEASE_MANIFEST.md` | 发版清单与规则（含"已发布资产只增不改"） |
@@ -457,7 +461,8 @@
 | `src/tests/PoolDisplayInjectionTests.py` | 池级注入白名单回归 | `R38-static-pool-inject` |
 | `src/tests/DictionarySourceTests.py` | 词库完整字节重建、产物独立性、源删除不回生及污染注入负向测试；只写临时目录 | `R58-static-dictionary-source` |
 | `src/tests/JapaneseDictionaryTests.py` | Chinese build never reads `ja_*.json` (with negative control); Japanese build byte-stable, two sources only, empty injection maps, 13 rejection cases; keys are real game strings | `R80-static-japanese-dictionary` |
-| `src/tests/JapaneseLocalizationTests.cs` | Japanese engine fixtures by reflection: `unit` (scopes, kana re-apply, inputs/combos untouched, write-storm throttle, rejected dictionaries), `isolation` (no Chinese engine in the DLL, with Chinese DLL control), `host` (real CLR load via `Command.exe.config`) | `scripts/test_ja.ps1` |
+| `src/tests/JapaneseLocalizationTests.cs` | Japanese engine fixtures by reflection: `unit` (scopes, kana re-apply, inputs/combos untouched, write-storm throttle, rejected dictionaries), `isolation` (no Chinese engine in the DLL, with Chinese DLL control), `session` (run twice: untranslated TSV deduplicated across processes), `host` (real CLR load via `Command.exe.config`) | `scripts/test_ja.ps1` |
+| `src/tests/JapaneseWebViewTests.cs` | Real WebView2 prose fixture (x64, SDK from the game, never starts CMO): paragraphs/lists/<br>/formatting translated, links/textarea/contenteditable untouched, re-navigation, out-of-scope window, miss log, optional real scenario pages | `scripts/test_ja.ps1` |
 | `src/tests/JapaneseDeploymentTests.py` | Synthetic game-directory tests of `manage_ja_patch.py`: dry-run zero writes, foreign loader/running game/tampered candidate refused, rollback, byte-exact restore, drift handling | `R80-static-japanese-deployment` |
 | `src/tests/DbListCommentsTests.cs` | 数据库列表行尾 Comments 接线与行为（R72）：接线到位、整段优先命中、未命中不拆词、纯代号不产生中文污染 | `R72-static-db-comments` |
 | `src/tests/DatabaseResidueTests.py` | 数据库记录名三道判据：场景源不得用句子碎片覆盖 db_* 干净译名、已修脏值不得回生、残留改写脚本不得按词污染型号（均带负向用例）| `R71-static-db-residue` |

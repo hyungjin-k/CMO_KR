@@ -54,7 +54,7 @@ internal static class Program
         }
         private object Call(string name, params object[] args)
         {
-            MethodInfo method = type.GetMethod(name, BindingFlags.Public | BindingFlags.Static);
+            MethodInfo method = type.GetMethod(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
             if (method == null) throw new MissingMethodException(type.FullName, name);
             try { return method.Invoke(null, args); }
             catch (TargetInvocationException ex) { throw ex.InnerException; }
@@ -74,6 +74,7 @@ internal static class Program
             return ok;
         }
         internal string Menu(string text) { return (string)Call("TranslateMenuText", text); }
+        internal object Invoke(string name, params object[] args) { return Call(name, args); }
         internal string Options(string text) { return (string)Call("TranslateOptionsText", text); }
         internal void Form(Form form) { Call("TranslateForm", form); }
         internal bool IsOptions(Form form) { return (bool)Call("IsOptionsForm", form); }
@@ -101,6 +102,7 @@ internal static class Program
             if (mode == "unit" && args.Length == 4) Unit(args[1], args[2], args[3]);
             else if (mode == "isolation" && args.Length >= 2) Isolation(args[1], args.Length > 2 ? args[2] : null);
             else if (mode == "host") Host();
+            else if (mode == "session" && args.Length == 4) Session(args[1], args[2], args[3]);
             else
             {
                 Console.WriteLine("usage: unit <dll> <json> <scratch> | isolation <dll> [<zh dll>] | host");
@@ -164,6 +166,10 @@ internal static class Program
               "reject a value that is also a source key (" + error + ")");
         Check(!engine.Load(Doc("ja", "{}", good, menuKeys, optionKeys).Replace("\"words\":{}", "\"words\":{},\"extra\":{}"), out error),
               "reject unknown top-level sections (" + error + ")");
+        string unnormalized = Doc("ja", "{}", new[] { "File", "ファイル", "Apply", "適用", "Good  morning!", "おはよう" },
+                                  menuKeys, optionKeys).Replace("\"options\":[\"Apply\"]", "\"options\":[\"Apply\"],\"prose\":[\"Good  morning!\"]");
+        Check(unnormalized.Contains("\"prose\"") && !engine.Load(unnormalized, out error),
+              "reject a prose key that is not whitespace-normalized (" + error + ")");
         Check(engine.Menu("File") == "File", "rejected dictionaries leave the UI in English");
         // JSON escapes are spliced in after Doc() so Esc() cannot double the backslashes.
         string bs = ((char)92).ToString();   // one backslash
@@ -187,6 +193,34 @@ internal static class Program
         Check(engine.Options("Every x seconds") == "Every x seconds", "options rule refuses non-numeric values");
         Check(engine.Menu("Every 30 seconds") == "Every 30 seconds", "options rules never apply to menus");
         Check(engine.Options("Vertical scaling: x3") == "垂直方向の倍率: x3", "options rule: Vertical scaling: xN");
+
+        // Prose (scenario descriptions, briefings, messages): whitespace-normalized lookup.
+        Check((string)engine.Invoke("TranslateProseText", "Good morning!") == "おはようございます！", "prose: paragraph lookup");
+        Check((string)engine.Invoke("TranslateProseText", "  Good \r\n   morning!  ") == "おはようございます！",
+              "prose: line breaks and repeated spaces are normalized");
+        Check((string)engine.Invoke("TranslateProseText", "Unknown prose paragraph.") == "Unknown prose paragraph.",
+              "prose: unknown paragraph stays English");
+        Check(engine.Menu("Good morning!") == "Good morning!" && engine.Options("Good morning!") == "Good morning!",
+              "prose vocabulary is never used for menus or options");
+
+        // Menu rules for dynamic items observed in the live game (build 1900.24).
+        Check(engine.Menu("Air Sensors (Current: ON)") == "対空センサー (現在: ON)", "menu rule: (Current: ON) status suffix");
+        Check(engine.Menu("Comms Range (Current: OFF)") == "通信範囲 (現在: OFF)", "menu rule: (Current: OFF) status suffix");
+        Check(engine.Menu("Current: DB3000 v519") == "現在: DB3000 v519", "menu rule: 'Key:' head keeps the version tail");
+        Check(engine.Menu("Use latest DB3000: DB3000 v519") == "最新の DB3000 を使用: DB3000 v519",
+              "menu rule: 'Key' head keeps ': tail'");
+        Check(engine.Menu("Air Sensors (Current: MAYBE)") == "Air Sensors (Current: MAYBE)", "menu rule refuses unknown states");
+        Check(engine.Menu("Unknown Head: tail") == "Unknown Head: tail", "menu rule refuses an unknown head");
+        Check(engine.Menu("C:\\Users\\me\\x.scen") == "C:\\Users\\me\\x.scen", "menu rule never splits a path");
+        Check(engine.Menu(engine.Menu("Air Sensors (Current: ON)")) == "対空センサー (現在: ON)"
+              && engine.Menu(engine.Menu("Current: DB3000 v519")) == "現在: DB3000 v519", "menu rules are idempotent");
+        Check(engine.Options("Current: DB3000 v519") == "Current: DB3000 v519", "menu rules never apply to options");
+        int[] costs = { 0, 10, 40, 156, 100000 };
+        int[] expected = { 2500, 2500, 4000, 15000, 15000 };
+        bool intervals = true;
+        for (int i = 0; i < costs.Length; i++)
+            intervals &= (int)engine.Invoke("RescanInterval", (long)costs[i]) == expected[i];
+        Check(intervals, "rescan interval grows with scan cost (2.5 s .. 15 s)");
 
         // ── main window: menus only ──
         engine.Reset();
@@ -280,6 +314,30 @@ internal static class Program
         Check(misses.Contains("menu\tToolStripMenuItem\tFixture Only Command"), "untranslated menu item recorded");
         Check(!misses.Contains("x.scen") && !misses.Contains("Users"), "recent-file paths are never recorded");
         Check(!misses.Contains("ファイル"), "translated text is not recorded as missing");
+
+        // A new game session re-opens the same file: earlier entries must not be appended again.
+        engine.Diagnostics(scratch);
+        engine.Form(MainFixture());
+        string again = File.ReadAllText(tsv, Encoding.UTF8);
+        int occurrences = again.Split(new[] { "Fixture Only Command" }, StringSplitOptions.None).Length - 1;
+        Check(occurrences == 1, "reloading the diagnostics file keeps entries unique (occurrences=" + occurrences + ")");
+    }
+
+    // One game session: run twice in separate processes over the same directory (test_ja.ps1).
+    // The second process starts with an empty in-memory set, like a restarted game.
+    private static void Session(string dllPath, string dictPath, string dir)
+    {
+        Engine engine = new Engine(Assembly.LoadFrom(dllPath));
+        Directory.CreateDirectory(dir);
+        engine.Diagnostics(dir);
+        string error;
+        Check(engine.LoadFile(dictPath, out error), "session: dictionary loaded (" + (error ?? "ok") + ")");
+        engine.Form(MainFixture());
+        string tsv = Path.Combine(dir, "CMOLocalizerJa_untranslated.tsv");
+        string text = File.Exists(tsv) ? File.ReadAllText(tsv, Encoding.UTF8) : "";
+        int occurrences = text.Split(new[] { "Fixture Only Command" }, StringSplitOptions.None).Length - 1;
+        Check(occurrences == 1, "session: each untranslated string is recorded once across sessions (occurrences="
+              + occurrences + ")");
     }
 
     private static void Raise(Type declaring, object target, string method, EventArgs args)

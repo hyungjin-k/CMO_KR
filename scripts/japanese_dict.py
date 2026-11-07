@@ -30,11 +30,14 @@ DICT = ROOT / "dict"
 OUTPUT_NAME = "CMOLocalizerJa.json"
 
 PROFILE = "ja-minimal-ui-v1"
-SOURCES = {"menu": "ja_menu.json", "options": "ja_options.json"}
+SOURCES = {"menu": "ja_menu.json", "options": "ja_options.json", "prose": "ja_prose.json"}
+OPTIONAL_SCOPES = {"prose"}
 # Hiragana/katakana, CJK ideographs (incl. extension A) and half-width katakana.
 JAPANESE = re.compile("[%s-%s%s-%s%s-%s]" % tuple(chr(c) for c in (0x3040, 0x30FF, 0x3400, 0x9FFF, 0xFF66, 0xFF9F)))
 TOKENS = re.compile(r"\{[^{}]*\}|<%[^%]*%>|%(?:\d+\$)?[-+#0]*\d*(?:\.\d+)?[sdifouxXeEgGc]|\b(?:Ctrl|Shift|Alt)\s*\+\s*(?:(?:Ctrl|Shift|Alt)\s*\+\s*)*[A-Za-z0-9]+|\bF(?:1[0-2]|[1-9])\b")
-CODE = re.compile(r"ScenEdit_|\bSELECT\s+.+\s+FROM\b|\b(?:INSERT INTO|DELETE FROM|DROP TABLE)\b|<\s*/?\s*(?:script|html|body)\b", re.I)
+# SQL keywords are matched case-sensitively: "Select tanker from mission:" is a real menu item.
+CODE = re.compile(r"ScenEdit_|<\s*/?\s*(?:script|html|body)\b", re.I)
+SQL = re.compile(r"\bSELECT\s+.+\s+FROM\b|\b(?:INSERT INTO|DELETE FROM|DROP TABLE)\b")
 TOP_LEVEL_SECTIONS = ("_meta", "comments", "offsets", "exact", "partial", "words")
 
 
@@ -52,7 +55,7 @@ def validate_pair(source: str, target: str) -> None:
         raise ValueError(f"empty/non-string translation: {source!r}")
     if source == target or not JAPANESE.search(target):
         raise ValueError(f"expected a Japanese translation: {source!r}")
-    if CODE.search(source) or CODE.search(target):
+    if CODE.search(source) or CODE.search(target) or SQL.search(source) or SQL.search(target):
         raise ValueError(f"code is not a UI translation: {source!r}")
     if Counter(TOKENS.findall(source)) != Counter(TOKENS.findall(target)):
         raise ValueError(f"placeholder or shortcut changed: {source!r}")
@@ -68,6 +71,80 @@ def validate_pair(source: str, target: str) -> None:
     if source[:lead] != target[:len(target) - len(target.lstrip())] or \
             source[len(source) - trail:] != target[len(target.rstrip()):]:
         raise ValueError(f"leading/trailing whitespace changed: {source!r}")
+
+
+WHITESPACE = re.compile(r"\s+")
+KEY_NAMES = re.compile(r"\b(?:CTRL|SHIFT|ALT|ESC|ENTER)\b")
+DIGITS = re.compile(r"\d+")
+
+
+def quoted_labels(text: str) -> list[str]:
+    """Double-quoted segments paired in order ("a" and "b" -> a, b); an unpaired last quote is ignored.
+
+    A length-limited regex used to pair the closing quote of one long label with the opening
+    quote of the next and demand that the words between them (" and ") stay English.
+    """
+    parts = text.split('"')
+    return [parts[i] for i in range(1, len(parts) - 1, 2) if parts[i].strip()]
+
+
+def normalize_prose(text: str) -> str:
+    """Same unit the engine compares inside WebView2: whitespace runs collapsed, trimmed."""
+    return WHITESPACE.sub(" ", text).strip()
+
+
+def validate_prose_pair(source: str, target: str) -> None:
+    """Scenario descriptions, briefings and messages (scope `prose`).
+
+    Keeps what a player must type, read on screen or find on disk: placeholders,
+    F-keys and key combos, quoted UI labels (the game's buttons stay English),
+    every number, and Windows paths.
+    """
+    if not isinstance(target, str) or not target.strip():
+        raise ValueError(f"empty/non-string translation: {source[:60]!r}")
+    if source != normalize_prose(source):
+        raise ValueError(f"prose key is not whitespace-normalized: {source[:60]!r}")
+    if target != normalize_prose(target):
+        raise ValueError(f"translation contains line breaks or doubled spaces: {source[:60]!r}")
+    if source == target or not JAPANESE.search(target):
+        raise ValueError(f"expected a Japanese translation: {source[:60]!r}")
+    if CODE.search(source) or CODE.search(target) or SQL.search(source) or SQL.search(target):
+        raise ValueError(f"code is not a prose translation: {source[:60]!r}")
+    if Counter(TOKENS.findall(source)) != Counter(TOKENS.findall(target)):
+        raise ValueError(f"placeholder, F-key or key combo changed: {source[:60]!r}")
+    lost = Counter(KEY_NAMES.findall(source)) - Counter(KEY_NAMES.findall(target))
+    if lost:
+        raise ValueError(f"key names lost {sorted(lost)}: {source[:60]!r}")
+    lost = Counter(DIGITS.findall(source)) - Counter(DIGITS.findall(target))
+    if lost:
+        raise ValueError(f"numbers lost {sorted(lost)}: {source[:60]!r}")
+    for label in quoted_labels(source):
+        if label not in target:
+            raise ValueError(f"quoted UI label {label!r} must stay verbatim: {source[:60]!r}")
+    if source.count("\\") != target.count("\\") or \
+            any(part and part not in target for part in source.split("\\")[1:-1]):
+        raise ValueError(f"Windows path changed: {source[:60]!r}")
+    for opened, closed in (("(", ")"), ("[", "]"), ("{", "}")):
+        if source.count(opened) - source.count(closed) != target.count(opened) - target.count(closed):
+            raise ValueError(f"unbalanced delimiters: {source[:60]!r}")
+
+
+def check_prose_file(path: Path) -> list[str]:
+    """Validate a candidate translation file {English paragraph: Japanese}; return all errors."""
+    data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
+    errors = []
+    for source, target in data.items():
+        if source.startswith("_"):
+            continue
+        try:
+            validate_prose_pair(source, target)
+        except ValueError as exc:
+            errors.append(str(exc))
+    try:
+        validate_scope("prose", {k: v for k, v in data.items() if not k.startswith("_")})
+    except ValueError as exc:
+        errors.append(str(exc))
+    return errors
 
 
 def validate_scope(scope: str, pairs: dict) -> None:
@@ -87,15 +164,17 @@ def build(source_dir: Path, version: str, game_build: str) -> dict:
     exact = {}
     scopes = {}
     for scope, filename in SOURCES.items():
-        data = json.loads((source_dir / filename).read_text(encoding="utf-8"),
-                          object_pairs_hook=unique_object)
+        path = source_dir / filename
+        if scope in OPTIONAL_SCOPES and not path.is_file():
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
         if not isinstance(data, dict):
             raise ValueError(f"{filename}: expected an object")
         pairs = {}
         for source, target in data.items():
             if source.startswith("_"):
                 continue
-            validate_pair(source, target)
+            (validate_prose_pair if scope == "prose" else validate_pair)(source, target)
             if source in exact and exact[source] != target:
                 raise ValueError(f"conflicting Japanese translations: {source!r}")
             exact[source] = target
@@ -141,7 +220,15 @@ def main(argv=None) -> int:
     parser.add_argument("--out", type=Path, help="write the dictionary here (never inside dict/)")
     parser.add_argument("--check", action="store_true", help="validate and prove byte-stable output; no write")
     parser.add_argument("--source-dir", type=Path, default=SRC)
+    parser.add_argument("--check-prose", type=Path, metavar="FILE",
+                        help="validate a candidate prose translation file {English: Japanese} and exit")
     args = parser.parse_args(argv)
+    if args.check_prose:
+        errors = check_prose_file(args.check_prose)
+        for error in errors:
+            print(f"FAIL {error}")
+        print(f"{'PASS' if not errors else 'FAILED'} prose candidate {args.check_prose} ({len(errors)} errors)")
+        return 0 if not errors else 1
     if not args.out and not args.check:
         parser.error("choose --check and/or --out")
     version, game_build = read_anchor("VERSION"), read_anchor("GAME_BUILD")

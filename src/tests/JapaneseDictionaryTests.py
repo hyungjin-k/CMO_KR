@@ -85,9 +85,12 @@ def main() -> int:
           "metadata declares language, profile and game build")
     menu = json.loads((ja.SRC / "ja_menu.json").read_text(encoding="utf-8"))
     options = json.loads((ja.SRC / "ja_options.json").read_text(encoding="utf-8"))
+    prose = json.loads((ja.SRC / "ja_prose.json").read_text(encoding="utf-8"))
     check(meta["scopes"]["menu"] == sorted(k for k in menu if not k.startswith("_"))
-          and meta["scopes"]["options"] == sorted(k for k in options if not k.startswith("_")),
-          f"scopes mirror the two sources (menu={len(meta['scopes']['menu'])}, options={len(meta['scopes']['options'])})")
+          and meta["scopes"]["options"] == sorted(k for k in options if not k.startswith("_"))
+          and meta["scopes"]["prose"] == sorted(k for k in prose if not k.startswith("_")),
+          f"scopes mirror the three sources (menu={len(meta['scopes']['menu'])}, "
+          f"options={len(meta['scopes']['options'])}, prose={len(meta['scopes']['prose'])})")
     check(all(ja.JAPANESE.search(v) for v in doc["exact"].values()), "every value contains Japanese script")
     check(sum(1 for v in doc["exact"].values() if not re.search(r"[一-鿿]", v)) > 50,
           "kana-only values are kept (they were dropped by the Chinese sanitize)")
@@ -98,7 +101,7 @@ def main() -> int:
         for name in ja.SOURCES.values():
             (source / name).write_bytes((ja.SRC / name).read_bytes())
         check(ja.serialize(ja.build(source, version, game_build)) == first,
-              "a directory holding only the two Japanese sources builds the same bytes (no other input)")
+              "a directory holding only the three Japanese sources builds the same bytes (no other input)")
 
     bad = {
         "untranslated value": {"File": "File"},
@@ -108,6 +111,7 @@ def main() -> int:
         "changed mnemonic": {"&File": "ファイル"},
         "unbalanced parenthesis": {"Mode (A)": "モード (A"},
         "code": {"ScenEdit_SetUnit": "ユニット"},
+        "SQL": {"SELECT * FROM units": "ユニット"},
         "padding lost": {"Display all ": "すべて表示"},
         "value equals another key": {"File": "ファイル", "ファイル": "ファイル表示"},
         "empty value": {"File": ""},
@@ -128,6 +132,38 @@ def main() -> int:
             duplicate = str(exc)
         check(duplicate is not None, f"reject duplicate JSON keys ({duplicate})")
     check(rejects({"File": "ファイル"}) is None, "negative control: a valid pair is accepted")
+    check(rejects({"Select tanker from mission:": "ミッションから給油機を選択:"}) is None,
+          "natural 'Select ... from' menu text is not mistaken for SQL (live false positive)")
+
+    # ── prose (scenario descriptions, briefings, messages) ──
+    ok_pair = ('Select one of them and click on the "Ready/Arm" button.',
+               'そのうち1機を選択し、"Ready/Arm" ボタンをクリックします。')
+    ja.validate_prose_pair(*ok_pair)
+    check(True, "negative control: a valid prose pair is accepted")
+    long_labels = ('Uncheck "Investigate unknown contacts outside the patrol area" and "Investigate unknown contacts within weapons range".',
+                   '"Investigate unknown contacts outside the patrol area" と "Investigate unknown contacts within weapons range" のチェックを外します。')
+    ja.validate_prose_pair(*long_labels)
+    check(True, "quoted labels longer than 40 characters pair correctly (live false positive)")
+    bad_prose = {
+        "number lost": ("You have 6 F-16I Sufa.", "F-16I Sufa が数機あります。"),
+        "quoted UI label translated": ('Click on "OK-Ready".', "「準備完了」をクリックします。"),
+        "F-key lost": ("Press F6 to open it.", "ファンクションキーで開きます。"),
+        "key name lost": ("Press CTRL + SHIFT + F9.", "コントロール + シフト + F9 を押します。"),
+        "path component translated": (r"It is at C:\Program Files (x86)\Steam\Docs.",
+                                      r"C:\プログラム (x86)\Steam\Docs にあります。"),
+        "key not normalized": ("Good  morning!", "おはようございます！"),
+        "line break in value": ("Good morning!", "おはよう" + chr(10) + "ございます！"),
+        "English only": ("Good morning!", "Good morning!"),
+    }
+    for label, (source, target) in bad_prose.items():
+        try:
+            ja.validate_prose_pair(source, target)
+            error = None
+        except ValueError as exc:
+            error = str(exc)
+        check(error is not None, f"reject prose: {label} ({error})")
+    check(not any(k for k in prose if not k.startswith("_") and k != ja.normalize_prose(k)),
+          f"every prose key is whitespace-normalized ({len(prose) - 1} paragraphs)")
 
     # ── CLI ──
     target = ROOT / "dict" / "ja-probe.json"
@@ -146,8 +182,17 @@ def main() -> int:
         found = re.match(r"\[\d+\] (.*?)  ==>  ", line)
         if found:
             dump.add(found.group(1))
-    unknown = sorted(k for k in doc["exact"] if k not in pool and k not in dump and k not in UNVERIFIED_KEYS)
-    check(not unknown, f"every key is a game string from the pool or the menu dump (unknown: {unknown})")
+    # Strings read from the live game's CMOLocalizerJa_untranslated.tsv, recorded per game build.
+    live = set()
+    for key, value in menu.items():
+        if key.startswith("_live_observed_"):
+            check(isinstance(value, list) and all(v in menu for v in value),
+                  f"{key}: every live-observed key is a translated menu entry ({len(value)})")
+            live.update(value)
+    # Prose keys come from scenario HTML; `scripts/extract_ja_prose.py coverage` checks them against the game.
+    unknown = sorted(k for k in doc["exact"] if k not in prose
+                     and k not in pool and k not in dump and k not in live and k not in UNVERIFIED_KEYS)
+    check(not unknown, f"every key is a game string from the pool, the menu dump or the live game (unknown: {unknown})")
     check(all(k in doc["exact"] for k in UNVERIFIED_KEYS), "the unverified allowlist has no stale entries")
 
     print(f"ALL PASS ({passes})")

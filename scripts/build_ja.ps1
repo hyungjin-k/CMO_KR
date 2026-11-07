@@ -4,8 +4,8 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_ja.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_ja.ps1 -OutputDir build/ja-candidate -Replace
 #
-# Output: CMOLocalizerJa.dll (compiled from src/ja/JapaneseUiLocalization.cs ONLY,
-# so no Chinese engine code is present), CMOLocalizerJa.json and
+# Output: CMOLocalizerJa.dll (compiled from src/ja/*.cs ONLY, so no Chinese engine
+# code is present), CMOLocalizerJa.json and
 # ja-candidate.manifest.json (SHA256 of both, source commit, CLR entry point).
 [CmdletBinding()]
 param(
@@ -20,13 +20,15 @@ $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if (-not $OutputDir) { $OutputDir = Join-Path $repo 'build\ja-candidate' }
 $OutputDir = [IO.Path]::GetFullPath($OutputDir)
 $manifestName = 'ja-candidate.manifest.json'
-$source = Join-Path $repo 'src\ja\JapaneseUiLocalization.cs'
+$sourceDir = Join-Path $repo 'src\ja'
+$sources = @(Get-ChildItem -LiteralPath $sourceDir -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName })
 $assemblyName = 'CMOLocalizerJa'
 $profileName = 'ja-minimal-ui-v1'
 $domainManagerType = 'CMOLocalizer.Japanese.JapaneseDomainManager'
 $assemblyIdentity = "$assemblyName, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
 
-foreach ($required in @($Compiler, $source)) {
+if ($sources.Count -eq 0) { throw "No Japanese engine sources in $sourceDir" }
+foreach ($required in @($Compiler) + $sources) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing build input: $required" }
 }
 $dictRoot = [IO.Path]::GetFullPath((Join-Path $repo 'dict'))
@@ -64,7 +66,7 @@ try {
     $dll = Join-Path $OutputDir "$assemblyName.dll"
     $arguments = @('-nologo', '-utf8output', '-codepage:65001', '-target:library', '-platform:anycpu',
         '-optimize+', "-out:$dll", '-reference:System.dll', '-reference:System.Core.dll',
-        '-reference:System.Drawing.dll', '-reference:System.Windows.Forms.dll', $source, $assemblyInfo)
+        '-reference:System.Drawing.dll', '-reference:System.Windows.Forms.dll') + $sources + @($assemblyInfo)
     & $Compiler @arguments
     if ($LASTEXITCODE -ne 0) { throw "Japanese engine compilation failed (exit $LASTEXITCODE)." }
 }

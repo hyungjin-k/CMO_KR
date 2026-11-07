@@ -59,7 +59,7 @@ namespace CMOLocalizer.Japanese
         }
     }
 
-    public static class JapaneseUiLocalization
+    public static partial class JapaneseUiLocalization
     {
         public const string Profile = "ja-minimal-ui-v1";
         public const string DictionaryFileName = "CMOLocalizerJa.json";
@@ -69,6 +69,7 @@ namespace CMOLocalizer.Japanese
         private const int MaxRewritesPerSecond = 30;
         private const int RewriteCooldownMs = 3000;
         private const int FormRescanMs = 2500;
+        private const int MaxFormRescanMs = 15000;
         private const int MaxMisses = 4000;
         private const long MaxLogBytes = 4L * 1024 * 1024;
         private const int MaxDepth = 64;
@@ -78,14 +79,16 @@ namespace CMOLocalizer.Japanese
         {
             internal readonly Dictionary<string, string> Menu;
             internal readonly Dictionary<string, string> Options;
+            internal readonly Dictionary<string, string> Prose;   // whitespace-normalized keys; may be empty
             internal readonly string ProfileName;
             internal readonly string GameBuild;
 
             internal Catalog(Dictionary<string, string> menu, Dictionary<string, string> options,
-                             string profile, string gameBuild)
+                             Dictionary<string, string> prose, string profile, string gameBuild)
             {
                 Menu = menu;
                 Options = options;
+                Prose = prose;
                 ProfileName = profile;
                 GameBuild = gameBuild;
             }
@@ -103,12 +106,12 @@ namespace CMOLocalizer.Japanese
         private static readonly HashSet<string> misses = new HashSet<string>(StringComparer.Ordinal);
         private static readonly HashSet<string> seenForms = new HashSet<string>(StringComparer.Ordinal);
         private static int menuWrites, optionsWrites, eventRewrites, blockedRewrites, missCount, scans;
-        private static long slowestScanMs;
+        private static long slowestScanMs, scanTotalMs, timedScans;
 
         // ── per-object state (weak: never keeps game controls alive) ───────
         private sealed class ItemHook { internal bool Options; internal bool TextOwned; }
         private sealed class WriteGate { internal int WindowStart; internal int Count; internal int BlockedUntil; internal bool Blocked; }
-        private sealed class ScanState { internal int LastScan; internal bool Scanned; }
+        private sealed class ScanState { internal int LastScan; internal bool Scanned; internal long LastCostMs; }
         private static readonly ConditionalWeakTable<ToolStripItem, ItemHook> itemHooks = new ConditionalWeakTable<ToolStripItem, ItemHook>();
         private static readonly ConditionalWeakTable<Control, object> controlHooks = new ConditionalWeakTable<Control, object>();
         private static readonly ConditionalWeakTable<ContextMenuStrip, object> contextHooks = new ConditionalWeakTable<ContextMenuStrip, object>();
@@ -130,6 +133,15 @@ namespace CMOLocalizer.Japanese
         private const string MinutesSuffix = "分ごと";
         private const string VerticalScalingPrefix = "垂直方向の倍率: x";
 
+        // Menu-only dynamic items seen in the live game (build 1900.24):
+        //   "Air Sensors (Current: ON)"          -> T("Air Sensors") + " (現在: ON)"
+        //   "Use latest DB3000: DB3000 v519"     -> T("Use latest DB3000") + ": DB3000 v519"
+        //   "Current: DB3000 v519"               -> T("Current:") + " DB3000 v519"
+        // The head must be an exact menu key; the tail is kept verbatim.
+        private static readonly Regex CurrentStatusRule = new Regex(
+            @"^(.+) \(Current: (ON|OFF)\)$", RegexOptions.CultureInvariant);
+        private const string CurrentLabel = "現在:";
+
         // ── public surface (runtime + isolated fixtures) ────────────────────
 
         public static void Start(string baseDir)
@@ -139,6 +151,7 @@ namespace CMOLocalizer.Japanese
             try
             {
                 AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
+                AppDomain.CurrentDomain.ProcessExit += delegate { Log("exit " + StatsLine()); };
             }
             catch { }
             Log("=== CMOLocalizerJa " + Profile + " starting; pid=" + Process.GetCurrentProcess().Id
@@ -169,6 +182,23 @@ namespace CMOLocalizer.Japanese
             }
             logPath = Path.Combine(directory, LogFileName);
             missPath = Path.Combine(directory, UntranslatedFileName);
+            // Earlier sessions' entries are already in the file: never append them twice.
+            lock (missLock)
+            {
+                misses.Clear();
+                try
+                {
+                    if (File.Exists(missPath))
+                    {
+                        foreach (string line in File.ReadAllLines(missPath, Encoding.UTF8))
+                        {
+                            string[] cells = line.Split('\t');
+                            if (cells.Length == 3 && misses.Count < MaxMisses) misses.Add(cells[0] + "\t" + cells[2]);
+                        }
+                    }
+                }
+                catch (Exception ex) { LogException("untranslated reload", ex); }
+            }
         }
 
         public static bool LoadDictionaryFile(string path, out string error)
@@ -235,7 +265,17 @@ namespace CMOLocalizer.Japanese
                 if (menu == null) return false;
                 Dictionary<string, string> options = BuildScope(scopes, "options", exact, ref error);
                 if (options == null) return false;
-                catalog = new Catalog(menu, options, profile, GetValue(meta, "game_build") as string ?? "");
+                Dictionary<string, string> prose = new Dictionary<string, string>(StringComparer.Ordinal);
+                if (scopes.ContainsKey("prose"))
+                {
+                    prose = BuildScope(scopes, "prose", exact, ref error);
+                    if (prose == null) return false;
+                    foreach (string key in prose.Keys)
+                    {
+                        if (key != NormalizeProse(key)) { error = "prose key is not whitespace-normalized"; return false; }
+                    }
+                }
+                catalog = new Catalog(menu, options, prose, profile, GetValue(meta, "game_build") as string ?? "");
                 return true;
             }
             catch (Exception ex)
@@ -278,6 +318,8 @@ namespace CMOLocalizer.Japanese
             else
             {
                 WalkMenus(form, 0);
+                // Some windows keep their WebView2 outside the Controls tree until shown.
+                if (IsProseWindow(form)) AttachProseFields(form);
             }
         }
 
@@ -293,7 +335,18 @@ namespace CMOLocalizer.Japanese
                 + ";eventRewrites=" + Thread.VolatileRead(ref eventRewrites)
                 + ";blockedRewrites=" + Thread.VolatileRead(ref blockedRewrites)
                 + ";misses=" + Thread.VolatileRead(ref missCount)
-                + ";scans=" + Thread.VolatileRead(ref scans);
+                + ";scans=" + Thread.VolatileRead(ref scans)
+                + ";proseRequests=" + Thread.VolatileRead(ref proseRequests)
+                + ";proseWrites=" + Thread.VolatileRead(ref proseWrites);
+        }
+
+        private static string StatsLine()
+        {
+            long timed = Interlocked.Read(ref timedScans);
+            long total = Interlocked.Read(ref scanTotalMs);
+            return "stats " + Stats() + " timedScans=" + timed
+                + " avgScanMs=" + (timed > 0 ? (total / timed).ToString(CultureInfo.InvariantCulture) : "0")
+                + " slowestScanMs=" + Interlocked.Read(ref slowestScanMs);
         }
 
         public static void ResetCounters()
@@ -341,6 +394,26 @@ namespace CMOLocalizer.Japanese
             return map != null && map.TryGetValue(key, out value) ? value : null;
         }
 
+        private static bool TryMenuRule(Dictionary<string, string> map, string text, out string translated)
+        {
+            translated = null;
+            string core;
+            Match status = CurrentStatusRule.Match(text);
+            if (status.Success)
+            {
+                if (!map.TryGetValue(status.Groups[1].Value, out core)) return false;
+                translated = core + " (" + CurrentLabel + " " + status.Groups[2].Value + ")";
+                return true;
+            }
+            int colon = text.IndexOf(": ", StringComparison.Ordinal);
+            if (colon <= 0 || colon + 2 >= text.Length) return false;
+            string head = text.Substring(0, colon);
+            string tail = text.Substring(colon + 2);
+            if (map.TryGetValue(head + ":", out core)) { translated = core + " " + tail; return true; }
+            if (map.TryGetValue(head, out core)) { translated = core + ": " + tail; return true; }
+            return false;
+        }
+
         private static bool TryTranslate(Dictionary<string, string> map, bool optionsScope, string text, out string translated)
         {
             translated = null;
@@ -356,7 +429,7 @@ namespace CMOLocalizer.Japanese
                 translated = text.Substring(0, lead) + core.Trim() + text.Substring(text.Length - trail);
                 return true;
             }
-            if (!optionsScope) return false;
+            if (!optionsScope) return TryMenuRule(map, text, out translated);
             Match every = EveryRule.Match(text);
             if (every.Success)
             {
@@ -398,6 +471,11 @@ namespace CMOLocalizer.Japanese
                         if (dropDown.HasDropDownItems) TranslateItems(dropDown.DropDownItems, false, 1);
                     }
                 }
+                return;
+            }
+            if (control.GetType().FullName == WebView2TypeName)
+            {
+                OnWebView(control);
                 return;
             }
             if (!control.HasChildren) return;
@@ -780,6 +858,7 @@ namespace CMOLocalizer.Japanese
             currentPid = (uint)Process.GetCurrentProcess().Id;
             Log("watcher started");
             int loop = 0;
+            string lastStats = null;
             while (true)
             {
                 try
@@ -787,9 +866,11 @@ namespace CMOLocalizer.Japanese
                     Thread.Sleep(loop < 60 ? 500 : 1000);
                     loop++;
                     EnumWindows(topWindowCallback, IntPtr.Zero);
-                    if (loop == 20 || loop % 300 == 0)
+                    if (loop % 60 == 0)
                     {
-                        Log("stats " + Stats() + " slowestScanMs=" + Interlocked.Read(ref slowestScanMs));
+                        string stats = Stats();
+                        if (stats != lastStats) Log(StatsLine());   // about once a minute, only on change
+                        lastStats = stats;
                     }
                 }
                 catch (Exception ex)
@@ -836,6 +917,19 @@ namespace CMOLocalizer.Japanese
             }
         }
 
+        /// <summary>
+        /// Periodic rescans are only a safety net (menus are translated on DropDownOpening and
+        /// TextChanged), so an expensive window is revisited less often: cost x 100, 2.5 s..15 s.
+        /// The live main window's first scan took 156 ms; at that cost it is rescanned every 15 s.
+        /// </summary>
+        internal static int RescanInterval(long lastCostMs)
+        {
+            long interval = lastCostMs * 100;
+            if (interval < FormRescanMs) interval = FormRescanMs;
+            if (interval > MaxFormRescanMs) interval = MaxFormRescanMs;
+            return (int)interval;
+        }
+
         private static void RunScan(Control control)
         {
             try
@@ -843,12 +937,14 @@ namespace CMOLocalizer.Japanese
                 if (control.IsDisposed || catalog == null) return;
                 Stopwatch watch = Stopwatch.StartNew();
                 Form form = control as Form;
+                ScanState state = null;
                 if (form != null)
                 {
-                    ScanState state = scanStates.GetOrCreateValue(form);
+                    state = scanStates.GetOrCreateValue(form);
                     int now = Environment.TickCount;
                     bool options = DetectOptionsForm(form);
-                    if (!options && state.Scanned && now - state.LastScan >= 0 && now - state.LastScan < FormRescanMs) return;
+                    if (!options && state.Scanned && now - state.LastScan >= 0
+                        && now - state.LastScan < RescanInterval(state.LastCostMs)) return;
                     state.Scanned = true;
                     state.LastScan = now;
                     TranslateForm(form);
@@ -859,6 +955,9 @@ namespace CMOLocalizer.Japanese
                     if (dropDown != null) TranslateItems(dropDown.Items, false, 0);
                 }
                 long elapsed = watch.ElapsedMilliseconds;
+                if (state != null) state.LastCostMs = elapsed;
+                Interlocked.Increment(ref timedScans);
+                Interlocked.Add(ref scanTotalMs, elapsed);
                 if (elapsed > Interlocked.Read(ref slowestScanMs))
                 {
                     Interlocked.Exchange(ref slowestScanMs, elapsed);
@@ -887,11 +986,14 @@ namespace CMOLocalizer.Japanese
             string path = missPath;
             if (path == null || string.IsNullOrEmpty(text)) return;
             string value = text.Trim();
-            if (value.Length < 2 || value.Length > 300 || !HasLatinWord(value) || ContainsJapanese(value)) return;
-            // Recent-file paths, e-mail-like strings and scenario files are personal, not UI.
-            if (value.IndexOf('\\') >= 0 || value.IndexOf(":/", StringComparison.Ordinal) >= 0 || value.IndexOf('@') >= 0
+            bool prose = scope == "prose";
+            if (value.Length < 2 || value.Length > (prose ? 4000 : 300) || !HasLatinWord(value) || ContainsJapanese(value)) return;
+            // Recent-file paths, e-mail-like strings and scenario files in menus are personal, not UI.
+            // Scenario prose legitimately names install paths ("C:\Program Files (x86)\...").
+            if (!prose && (value.IndexOf('\\') >= 0 || value.IndexOf(":/", StringComparison.Ordinal) >= 0
                 || value.EndsWith(".scen", StringComparison.OrdinalIgnoreCase)
-                || value.EndsWith(".save", StringComparison.OrdinalIgnoreCase)) return;
+                || value.EndsWith(".save", StringComparison.OrdinalIgnoreCase))) return;
+            if (value.IndexOf('@') >= 0) return;
             lock (missLock)
             {
                 if (misses.Count >= MaxMisses || !misses.Add(scope + "\t" + value)) return;
