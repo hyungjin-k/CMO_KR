@@ -378,6 +378,7 @@
 | 路径 | 职责 |
 |---|---|
 | `docs/ROUTING.md` | **本文件**。新增文件必须登记 |
+| `docs/JAPANESE_LOCALIZATION_FEASIBILITY.md` | Japanese patch feasibility audit in Korean: code evidence, locale risks, minimal UI plan and validation limits; update when the Japanese localization scope or baseline changes. |
 | `docs/BUG_REGISTRY.md` | 缺陷台账 R1–R50，**只增不改**。修 bug 必须登记 |
 | `docs/CHANGELOG.md` | 发布说明；`publish_release.py` 取顶部段落作为 Release 正文 |
 | `docs/RELEASE_MANIFEST.md` | 发版清单与规则（含"已发布资产只增不改"） |
