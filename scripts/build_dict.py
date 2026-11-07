@@ -5,7 +5,8 @@ Sources, merged in order (later wins):
 
     dict/src/legacy_preserved.json  lowest-priority explicit legacy translations
     dict/glossary.json              terminology seed (fills missing keys)
-    dict/src/*.json                 curated translation batches (sorted; later wins)
+    dict/src/*.json                 curated translation batches (sorted; later wins;
+                                    `ja_*.json` belongs to scripts/japanese_dict.py)
     dict/src/labels.json            UI-only translations, never pool-injected
     dict/src/blacklist.json         English keys to purge from every section
 
@@ -88,6 +89,10 @@ def iter_source_maps():
     if not SRC.is_dir():
         return
     for p in sorted(SRC.glob("*.json")):
+        # R80：`ja_*.json` 是日文档案（scripts/japanese_dict.py）的源，值是日文。
+        # 含汉字的日文（表示/保存/適用）能通过 sanitize，混进来会改写 exact 与池注入 offsets。
+        if p.name.startswith("ja_"):
+            continue
         if p.name in ("blacklist.json", "labels.json", "identifiers.json",
                       "force_offsets.json", "dlc_briefing_fixes.json",
                       "term_replacements.json", "terms.json", "legacy_preserved.json",

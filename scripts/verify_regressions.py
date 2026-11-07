@@ -288,6 +288,13 @@ def _run_ui_scheduling_and_report_gates(r: Runner) -> None:
     py_case("R76-static-sanitize-guards",
             "R76 构建期守卫不得误杀自然语言：分号句尾/番号后括号/全角括号互写放行，代码与结构差仍拦住",
             "src/tests/SanitizeGuardTests.py")
+    # R80：日文档案与中文构建互不污染；日文补丁部署工具只动三处且可字节级还原。
+    py_case("R80-static-japanese-dictionary",
+            "R80 中文构建不得读入 ja_*.json；日文词典只读两份源、字节稳定、不含池注入、拒绝不安全译文",
+            "src/tests/JapaneseDictionaryTests.py")
+    py_case("R80-static-japanese-deployment",
+            "R80 日文补丁部署：dry-run 零写入、拒绝他人 loader/运行中游戏、失败回滚、还原字节一致",
+            "src/tests/JapaneseDeploymentTests.py")
 
 
 def run_weapons_diagnostic(r: Runner) -> None:

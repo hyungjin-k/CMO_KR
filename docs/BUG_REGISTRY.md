@@ -2408,3 +2408,26 @@ python scripts/perf_probe.py          # 游戏已在想定里
   2. 订阅 `DocumentCompleted` 的钩子对**按需创建的对话框**天然漏拍：要么首次扫描就抓，
      要么在订阅时补一次「文档已加载」的即时翻译。
   3. 双语标注（英文 + 【中文】）只能当兜底；玩家要的是可用性，正文类界面必须整段替换。
+
+## R80 日文源 `ja_*.json` 被中文构建合并：`exact` 70 条 + 池注入 `offsets` 37 条变成日文（日文化分支，未发布，提交前拦截）
+
+- **来源**：`localization/ja` 分支新增 `dict/src/ja_menu.json`、`dict/src/ja_options.json`（日文最小界面档案）后，
+  按「改完必须 build_dict」复核中文产物。
+- **实测**：在临时目录重建中文词典（不写 `dict/CMOLocalizer.json`），与 `git show HEAD:dict/CMOLocalizer.json` 对比：
+  SHA256 `5136e429…` ≠ `27ec76b3…`；`exact` 差异 **70** 条（如 `Apply` 应用→適用、`Hostile` 敌对目标→敵、
+  `Close` 关闭→閉じる），`offsets` 差异 **37** 条——这些会在启动时直接写进游戏字符串池。
+- **根因**：`iter_source_maps()` 对 `dict/src/*.json` 无差别 glob；`sanitize` 只要求「含汉字」，
+  日文里带汉字的译文（表示/保存/適用/設定）全部放行，纯假名的被丢弃。表面上「大部分没混进来」，
+  实际按文件名排序后者覆盖前者。
+- **修复**：`scripts/build_dict.py` 的 `iter_source_maps()` 跳过 `ja_*.json`。日文档案由
+  `scripts/japanese_dict.py` 独立构建，产物 `CMOLocalizerJa.json` 只写到 `build/`，永不进 `dict/`。
+- **验收证据**：修复后同样重建，SHA256 = `27ec76b33ae29d4ef28d77d0e4ae6e0fba60403e1a11a98ecfa6f2ad7b5067f4`，
+  与 HEAD 字节一致。
+- **门禁**：`R80-static-japanese-dictionary`（`src/tests/JapaneseDictionaryTests.py`）：真实源树里
+  `iter_source_maps` 不产出 `ja_*`；夹具中带汉字的日文值进不了中文合并；负向对照 `jx_menu.json`
+  仍会被 glob 到（证明夹具本身有效）。
+- **教训**
+  1. 「源目录 glob 全收」的约定在引入第二种语言时会变成污染通道；语言前缀必须在构建入口显式排除，
+     不能指望 `sanitize` 碰巧过滤。
+  2. 以「含汉字」判断「是合法译文/已翻译」对日文不成立：假名被丢、汉字被收，两种错误同时发生
+     （引擎侧 `ContainsChinese` 同理，日文引擎因此不复用它，见 `src/ja/JapaneseUiLocalization.cs`）。
