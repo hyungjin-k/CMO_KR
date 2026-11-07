@@ -12,8 +12,9 @@
 ## 2. 문체
 
 - 본문은 です・ます調. 지시문은 「〜してください」「〜します」.
-- 무기·기체·함정 제식명, 장비명, 탑재 구성명(`Light 202`), 콜사인(`Sufa #4`), 인명·닉네임은 원문 그대로.
-- 지명은 일반적인 일본어 표기(가타카나): Ramat David → ラマト・ダビド, Northern Israel → イスラエル北部.
+- **고유명사는 원문 철자 그대로 둔다(2026-11-07 사용자 지시).** 지명(국가·지역·도시·해역·섬), 군사기지·비행장·항구, 부대·함선·항공기·차량 이름, 무기·센서·장비 이름, 진영(Side) 이름, 작전명, 탑재 구성명(`Light 202`), 콜사인(`Sufa #4`), 인명·닉네임. 게임의 지도·유닛 목록·데이터베이스가 영어이므로, 플레이어가 화면에서 찾을 수 있어야 한다. 이름에 붙은 일반어도 원문의 일부면 그대로 둔다: `Ramat David Air Base`, `RAF Lossiemouth`, `Northern Israel`, `Gulf of Sidra`.
+  - 예: "the commander of the Ramat David Air Base in Northern Israel" → `Northern Israel の Ramat David Air Base の司令官`
+  - 이름이 아닌 일반 명사는 번역한다: "the air base" → 空軍基地, "two destroyers" → 駆逐艦2隻.
 - 약어는 처음 나올 때 `日本語 (略語)` 형태로 쓰고, 이후에는 어느 쪽이든 좋다.
 
 ## 3. 용어

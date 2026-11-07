@@ -126,7 +126,9 @@ internal static class Program
         await Navigate(otherView, Page1);
         bool translated = await WaitFor(view, "document.getElementById('p1').innerText", "おはようございます！");
         Check(translated, "prose window: paragraph translated after the page loaded");
-        Check((await Text(view, "p2")).Contains("ラマト・ダビド空軍基地"), "long paragraph translated");
+        // Proper nouns stay in the original English (docs/JAPANESE_GLOSSARY.md).
+        string p2 = await Text(view, "p2");
+        Check(p2.Contains("Ramat David Air Base") && p2.Contains("司令官"), "long paragraph translated, base name kept in English");
         Check((await Text(view, "b1")).StartsWith("指揮下には F-16I Sufa 6機"), "paragraph with <b> formatting translated");
         Check(await Text(view, "l1") == "航空機の発進準備。" && await Text(view, "l2") == "航空機の発進。", "list items translated");
         string br = await Text(view, "br");
@@ -158,7 +160,7 @@ internal static class Program
             // The real scenario pages (read-only): the in-page paragraph split must agree with
             // scripts/extract_ja_prose.py, so a fully translated set records no new prose misses.
             string before = File.Exists(tsv) ? File.ReadAllText(tsv, Encoding.UTF8) : "";
-            string[] pages = Directory.GetFiles(pagesDir, "*.html");
+            string[] pages = Directory.GetFiles(pagesDir, "*.html", SearchOption.AllDirectories);
             Array.Sort(pages, StringComparer.Ordinal);
             int japanese = 0;
             foreach (string page in pages)

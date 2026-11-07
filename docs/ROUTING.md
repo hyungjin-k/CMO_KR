@@ -282,7 +282,7 @@
 |---|---|
 | `scripts/build_dict.py` | **核心构建**：`dict/src/*.json` → `dict/CMOLocalizer.json`（确定性、字节可复现） |
 | `scripts/japanese_dict.py` | Japanese dictionary builder: reads only `ja_menu.json`/`ja_options.json`; rejects untranslated, placeholder/shortcut/mnemonic/padding changes, code, conflicts and non-idempotent values; writes `CMOLocalizerJa.json` (empty offsets/words/partial/comments). Prose pairs also keep numbers, key names, quoted UI labels and paths. `--check`, `--out` (refuses `dict/`), `--check-prose FILE` for translator batches |
-| `scripts/extract_ja_prose.py` | Reads scenario HTML (read-only) and splits it into the engine's paragraph units: `worklist` (untranslated paragraphs with source files, for translators) and `coverage` (exit 3 while any paragraph is missing); never writes into the game or `dict/` |
+| `scripts/extract_ja_prose.py` | Reads scenario HTML and the plain `<ScenDescription>` of `.scen` files (read-only; the encrypted `Scenario_Compressed` block is never read) and splits them into the engine's paragraph units: `worklist` (untranslated paragraphs with source files, for translators) and `coverage` (exit 3 while any paragraph is missing); never writes into the game or `dict/` |
 | `scripts/build_db_enums.py` | 生成 `db_enums.json`（扫所有 `Enum*` 表） |
 | `scripts/build_db_enums_complete.py` | 国家/阵营官方规范译名对照 |
 | `scripts/generate_db_platforms_facilities.py` | 生成四类平台/设施名 |

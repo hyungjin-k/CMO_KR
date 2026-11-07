@@ -165,6 +165,26 @@ def main() -> int:
     check(not any(k for k in prose if not k.startswith("_") and k != ja.normalize_prose(k)),
           f"every prose key is whitespace-normalized ({len(prose) - 1} paragraphs)")
 
+    # ── extractor: .scen descriptions, LOADDOC markers, the encrypted block is never read ──
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import extract_ja_prose as ex
+    with tempfile.TemporaryDirectory(prefix="cmo-ja-scen-") as directory:
+        folder = Path(directory)
+        description = "&lt;BODY&gt;&lt;P&gt;Welcome to the fixture.&lt;/P&gt;&lt;P&gt;[LOADDOC]x.html[/LOADDOC]&lt;/P&gt;&lt;/BODY&gt;"
+        (folder / "Fixture.scen").write_text(
+            '<?xml version="1.0"?><ScenContainer><ScenTitle>Fixture Title</ScenTitle>'
+            f"<ScenDescription>{description}</ScenDescription>"
+            "<Scenario_Compressed>Hidden briefing sentence should never be read.</Scenario_Compressed></ScenContainer>",
+            encoding="utf-8")
+        (folder / "page.html").write_text("<html><body><p>Page paragraph here.</p><br>Second line here.</body></html>",
+                                          encoding="utf-8")
+        found = ex.collect(folder, "*")
+        check(set(found) == {"Welcome to the fixture.", "Page paragraph here.", "Second line here."},
+              f"extractor reads .scen descriptions and HTML, skips LOADDOC markers ({sorted(found)})")
+        check(found["Welcome to the fixture."] == ["Fixture.scen#ScenDescription"], "extractor records the .scen source")
+        check(not any("Hidden" in k or "Fixture Title" in k for k in found),
+              "negative control: the encrypted Scenario_Compressed block and the title are not read")
+
     # ── CLI ──
     target = ROOT / "dict" / "ja-probe.json"
     sink = io.StringIO()

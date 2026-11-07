@@ -2,7 +2,7 @@
 
 작성일: 2026-11-07. 근거 조사: [JAPANESE_LOCALIZATION_FEASIBILITY.md](JAPANESE_LOCALIZATION_FEASIBILITY.md) §6.
 
-이 후보는 **주요 메뉴, `Game Options` 창, 그리고 시나리오 설명·진영 브리핑·특별 메시지 본문**(현재 Flight Tutorial 1~8)을 일본어로 표시한다. 중국어 엔진을 수정하지 않고 별도 DLL로 동작하므로, 중국어 패치와 섞이지 않고 upstream 변경을 그대로 받을 수 있다. 실기에서는 엔진 시작과 메뉴 처리를 1회 확인했고, Game Options 번역은 아직 확인하지 않았다(§6).
+이 후보는 **주요 메뉴, `Game Options` 창, 그리고 시나리오 설명·진영 브리핑·특별 메시지 본문**(모든 튜토리얼, Standalone Scenarios, LIVE, Showcase, Tides Of War)을 일본어로 표시한다. 지명·기지·부대·함선·무기·진영 이름은 게임 화면에서 찾을 수 있도록 원문 그대로 둔다. 중국어 엔진을 수정하지 않고 별도 DLL로 동작하므로, 중국어 패치와 섞이지 않고 upstream 변경을 그대로 받을 수 있다. 실기에서는 엔진 시작과 메뉴 처리를 1회 확인했고, Game Options 번역은 아직 확인하지 않았다(§6).
 
 ## 1. 무엇이 바뀌는가
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | `menu` (363항목 + 규칙 2개) | 모든 창의 메뉴 바·하위 메뉴·컨텍스트 메뉴·툴바 드롭다운의 항목 텍스트, 단축키 표시 문자열, 툴팁 | 단축키 바인딩 자체, 툴바 버튼, 최근 파일 경로, 동적 항목(진영명·임무명) |
 | `options` (101항목 + 규칙 2개) | `Game Options` 창의 제목·탭·라벨·체크박스·라디오·버튼·GroupBox·`SectionHeader`·툴팁·그리드 열 머리글 | 텍스트 입력, ComboBox 항목·선택값, 숫자 입력, 체크 상태, 열 `Name` |
-| `prose` (312문단) | `Load Scenario` 창의 시나리오 설명, `Side selection and briefing` 창의 브리핑, `Special Messages` 팝업의 본문(모두 WebView2). 문단 단위로 통째 교체 | 링크·이미지가 섞인 문단, 입력칸, 편집 가능한 영역, 그 밖의 창에 있는 WebView2 |
+| `prose` (4,228문단) | `Load Scenario` 창의 시나리오 설명, `Side selection and briefing` 창의 브리핑, `Special Messages` 팝업의 본문(모두 WebView2). 문단 단위로 통째 교체 | 링크·이미지가 섞인 문단, 입력칸, 편집 가능한 영역, 그 밖의 창에 있는 WebView2 |
 
 - 사전에 정확히 있는 영어 문자열만 바꾼다. 없는 문자열은 영어로 남고 `CMOLocalizerJa_untranslated.tsv`에 기록된다.
 - `Every N seconds/minutes`, `Vertical scaling: xN`은 옵션 창 전용 규칙으로 처리한다(`N`이 숫자일 때만).
@@ -74,9 +74,9 @@ python -B -X utf8 scripts/manage_ja_patch.py restore --yes    # 영어로 복원
 
 | 검사 | 결과 |
 |---|---|
-| `test_ja.ps1` 전체 | 14단계 통과: unit 71, isolation 5, 별도 프로세스 세션 2회, host E2E 7, WebView2 본문 18, 사전 44, 배포 28 |
+| `test_ja.ps1` 전체 | 14단계 통과: unit 71, isolation 5, 별도 프로세스 세션 2회, host E2E 7, WebView2 본문 18, 사전 47, 배포 28 |
 | WebView2 본문 | 실제 Edge WebView2(런타임 157)에서 문단·목록·`<br>`·굵게 포함 문단 번역, 링크·textarea·contenteditable 불변, 재탐색 자동 번역, 범위 밖 창 불변. **게임의 Flight Tutorial HTML 56개 전부 일본어 표시, 미번역 문단 0**. 본문 기능이 없는 이전 엔진으로 돌리면 번역 검사가 FAIL(음성 대조) |
-| 본문 사전 | Flight Tutorial 1~8의 고유 문단 312개, `extract_ja_prose.py coverage` 누락 0. 번역은 FT1을 직접, 나머지 281문단을 용어집 기준으로 3개 묶음 병렬 번역 후 `--check-prose` 통과 |
+| 본문 사전 | 4,228문단. 게임에서 직접 읽은 원문 기준 커버리지(`extract_ja_prose.py coverage`): Tutorials 1,286/1,306, Standalone 350/351, Showcase 42/45, Tides Of War 108/222, LIVE 347/673. 나머지는 부대·함선·기지 목록처럼 이름뿐이라 규칙상 원문으로 둔 항목과, 문맥에 따라 뜻이 갈리는 표 머리글(`No`, `Range` 등 8개)이다. 튜토리얼 HTML 183개를 실제 WebView2에 띄우면 모두 일본어로 표시되고 미번역 19문단은 위 두 종류뿐이다 |
 | host E2E | CLR이 config에서 `JapaneseDomainManager` 로드 → 감시 스레드가 실제 창의 `File`→`ファイル`, Game Options `Use Autosave`→`自動保存を使用` 번역; en-US 요일명 불변; 중국어 엔진 로그 미생성; 복원 후 config SHA256 원본과 동일 |
 | isolation | 일본어 DLL: 중국어 엔진 타입·WPF 참조·중국어 런타임 문자열 0건. 같은 탐침이 중국어 DLL에서는 9건 검출(음성 대조) |
 | 변이 테스트 | 재적용 조건을 중국어 엔진처럼 "한자 포함"으로 바꾸면 `kana re-applied`만 실패(조사 문서 §4.1 재현), 입력 보호를 제거하면 `text input never written`만 실패 |
@@ -102,7 +102,8 @@ python -B -X utf8 scripts/manage_ja_patch.py restore --yes    # 영어로 복원
 3. ComboBox 항목(`Knots` 등)은 게임이 텍스트로 분기할 수 있어(R8) 의도적으로 영어로 둔다.
 4. 글꼴을 바꾸지 않는다. 일본어 글리프는 Windows 글꼴 연결에 맡긴다. 자형·잘림·DPI(100/125/150%)를 화면으로 확인해야 한다.
 5. 시작 화면(WPF), 툴바 버튼, 유닛 패널, 데이터베이스, 지도 지명은 범위 밖이다.
-6. 본문은 Flight Tutorial 1~8만 번역했다. 다른 시나리오의 설명·브리핑·메시지는 영어로 남고 `prose` 줄로 TSV에 기록된다. 시나리오 파일(`.scen`) 안에 직접 들어 있는 설명도 같은 WebView2로 표시되므로, 문단을 사전에 추가하면 같은 방식으로 번역된다.
+6. 원문 출처의 한계: `.scen`의 진영 브리핑·이벤트 메시지는 `Scenario_Compressed` 블록에 **암호화**되어 있어(엔트로피 8비트/바이트, IV로 보이는 머리부) 읽지 않는다. 대신 평문 `ScenDescription`, 시나리오 폴더의 HTML, 그리고 중국어 프로젝트가 화면에서 수집해 둔 영어 원문(`dict/src/*_side*.json`, `*_message*.json`)의 문장을 번역했다. 마지막 출처는 화면의 문단 분할과 다를 수 있어 일부는 일치하지 않을 수 있다. 일치하지 않은 문단은 플레이 중 `prose` 줄로 TSV에 기록되므로 다음 회차에 보완한다.
+6-1. 이 밖의 캠페인(Chains Of War, Desert Storm 등)은 아직 번역하지 않았다.
 7. 메뉴에서 여는 `Scenario Description`/`Side Briefing` 창 등 다른 창의 WebView2는 아직 범위 밖이다. 로그의 `WebView2 in … is outside the prose scope` 줄로 어떤 창인지 확인한 뒤 추가한다.
 
 실기 확인 순서: 게임 종료 → `apply --yes` → 게임 실행 → 메뉴 열기/닫기/재열기, 단축키 동작, `Game > Game Options` 열기·저장·취소·재열기, 설정값이 영어 상태와 같게 저장되는지 → 게임 종료 → `CMOLocalizerJa.log`, `CMOLocalizerJa_untranslated.tsv` 확인 → 필요하면 `restore --yes`.
