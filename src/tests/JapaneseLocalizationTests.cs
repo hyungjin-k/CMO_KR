@@ -26,6 +26,14 @@ internal sealed class DarkSectionPanel : Panel
     public string SectionHeader { get; set; }
 }
 
+// Like DarkUI's owner-drawn controls (DarkButton hides Text with `new` and repaints
+// only in its own setter): writing Control.Text alone does not repaint it.
+internal sealed class PaintedText : Control
+{
+    internal int Repaints;
+    protected override void OnInvalidated(InvalidateEventArgs e) { Repaints++; base.OnInvalidated(e); }
+}
+
 internal static class Program
 {
     private static int failures;
@@ -227,6 +235,9 @@ internal static class Program
         NumericUpDown number = (NumericUpDown)Find(options, "number");
         DataGridView grid = (DataGridView)Find(options, "grid");
         DarkSectionPanel section = (DarkSectionPanel)Find(options, "section");
+        PaintedText painted = (PaintedText)Find(options, "painted");
+        IntPtr paintedHandle = painted.Handle;   // live windows have handles; Invalidate is a no-op without one
+        painted.Repaints = 0;
         Label unknown = (Label)Find(options, "unknown");
         Label fight = (Label)Find(options, "fight");
         Button ok = (Button)Find(options, "ok");
@@ -244,6 +255,8 @@ internal static class Program
         Check(number.Value == 42, "numeric input preserved");
         Check(grid.Columns[0].HeaderText == "メッセージの種類" && grid.Columns[0].Name == "colType", "grid header translated, column name kept");
         Check(section.SectionHeader == "パフォーマンス", "custom SectionHeader translated");
+        Check(painted.Text == "音楽の音量" && painted.Repaints >= 1,
+              "owner-drawn control is asked to repaint after translation (repaints=" + painted.Repaints + ")");
         Check(options.Tips.GetToolTip(autosave) == "追加のメモリ保護", "tooltip translated");
         Check(ok.Text == "OK" && cancelOptions.Text == "キャンセル", "OK stays OK, Cancel translated");
         Check(unknown.Text == "Unknown fixture label", "unknown options label stays English");
@@ -374,6 +387,10 @@ internal static class Program
         section.Name = "section";
         section.SectionHeader = "Performance";
         units.Controls.Add(section);
+        PaintedText painted = new PaintedText();
+        painted.Name = "painted";
+        painted.Text = "Music Volume";
+        units.Controls.Add(painted);
 
         Button ok = new Button();
         ok.Name = "ok";

@@ -72,7 +72,7 @@ python -B -X utf8 scripts/manage_ja_patch.py restore --yes    # 영어로 복원
 
 | 검사 | 결과 |
 |---|---|
-| `test_ja.ps1` 전체 | 11단계 통과: unit 54, isolation 5, host E2E 7, 사전 30, 배포 28 |
+| `test_ja.ps1` 전체 | 10단계 통과: unit 55, isolation 5, host E2E 7, 사전 30, 배포 28 |
 | host E2E | CLR이 config에서 `JapaneseDomainManager` 로드 → 감시 스레드가 실제 창의 `File`→`ファイル`, Game Options `Use Autosave`→`自動保存を使用` 번역; en-US 요일명 불변; 중국어 엔진 로그 미생성; 복원 후 config SHA256 원본과 동일 |
 | isolation | 일본어 DLL: 중국어 엔진 타입·WPF 참조·중국어 런타임 문자열 0건. 같은 탐침이 중국어 DLL에서는 9건 검출(음성 대조) |
 | 변이 테스트 | 재적용 조건을 중국어 엔진처럼 "한자 포함"으로 바꾸면 `kana re-applied`만 실패(조사 문서 §4.1 재현), 입력 보호를 제거하면 `text input never written`만 실패 |
@@ -83,8 +83,8 @@ python -B -X utf8 scripts/manage_ja_patch.py restore --yes    # 영어로 복원
 
 아직 실제 CMO에서 실행하지 않았다. 다음은 실기에서만 확인할 수 있다.
 
-1. **Game Options 창 식별**: 창 제목이 `Game Options` 또는 `Options`이거나 타입 이름이 `GameOptions`/`Options`일 때만 옵션 범위가 켜진다. 실제 창이 다른 이름이면 옵션 번역이 전혀 안 되며, `CMOLocalizerJa.log`의 `window: type=… title=…` 줄로 실제 이름을 확인할 수 있다.
-2. 옵션 창이 WPF나 자체 그리기(owner-draw) 컨트롤이면 이 엔진이 닿지 않는다.
+1. **Game Options 창 식별**: 설치된 `Command.exe`를 읽기 전용 리플렉션으로 조사한 결과, 옵션 창은 WinForms `Command.Options`(기반 `DarkSecondaryFormBase` → `Form`)라서 타입 이름 조건에 걸린다. 실제 로드 여부는 `CMOLocalizerJa.log`의 `Game Options window detected` 줄로 확인한다.
+2. 옵션 창의 컨트롤은 DarkUI 자체 그리기 컨트롤(`DarkCheckBox` 46, `DarkLabel` 29, `DarkGroupBox` 10, 탭 7, `DarkDataGridView`)이다. `DarkButton`은 `Text`를 `new`로 숨기므로 엔진은 쓴 뒤 `Invalidate()`로 다시 그리기를 요청한다. `ToolTip` 필드는 없다. **`Hover Info` 탭은 WPF(`HoverInfoOptions`)라서 영어로 남는다.**
 3. ComboBox 항목(`Knots` 등)은 게임이 텍스트로 분기할 수 있어(R8) 의도적으로 영어로 둔다.
 4. 글꼴을 바꾸지 않는다. 일본어 글리프는 Windows 글꼴 연결에 맡긴다. 자형·잘림·DPI(100/125/150%)를 화면으로 확인해야 한다.
 5. 시작 화면(WPF), 툴바 버튼, 유닛 패널, 데이터베이스, 브리핑, 지도 지명은 범위 밖이다.

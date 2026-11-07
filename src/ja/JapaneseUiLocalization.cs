@@ -626,7 +626,24 @@ namespace CMOLocalizer.Japanese
             writingDepth++;
             try { control.Text = text; }
             finally { writingDepth--; }
+            RequestRepaint(control);
             Interlocked.Increment(ref optionsWrites);
+        }
+
+        /// <summary>
+        /// DarkUI's owner-drawn controls (Command.Options uses DarkCheckBox, DarkLabel, DarkGroupBox,
+        /// DarkButton, an owner-drawn tab control) repaint from their own setters; DarkButton even
+        /// hides Text with `new`. Writing through Control.Text therefore needs an explicit repaint,
+        /// and a tab caption lives in the parent TabControl.
+        /// </summary>
+        private static void RequestRepaint(Control control)
+        {
+            try
+            {
+                control.Invalidate();
+                if (control is TabPage && control.Parent != null) control.Parent.Invalidate();
+            }
+            catch (Exception ex) { LogException("repaint", ex); }
         }
 
         private static void ApplySectionHeader(Control control)
@@ -640,6 +657,7 @@ namespace CMOLocalizer.Japanese
             writingDepth++;
             try { property.SetValue(control, translated, null); }
             finally { writingDepth--; }
+            RequestRepaint(control);
             Interlocked.Increment(ref optionsWrites);
         }
 
